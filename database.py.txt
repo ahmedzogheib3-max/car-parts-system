@@ -1,0 +1,76 @@
+import sqlite3
+import pandas as pd
+import os
+
+DB_NAME = "auto_parts_shop.db"
+EXCEL_FILE = "اجمالي البضاعة 03 - 09 - 2026.xlsx"
+
+def get_connection():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_database():
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # 1. جدول المنتجات والمخزون
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='products'")
+    if not cursor.fetchone():
+        if os.path.exists(EXCEL_FILE):
+            try:
+                df_prod = pd.read_excel(EXCEL_FILE, sheet_name='Products')
+                df_prod.columns = [str(c).strip() for c in df_prod.columns]
+                products_clean = pd.DataFrame()
+                products_clean['name'] = df_prod.get('الصنف', df_prod.iloc[:, 1])
+                products_clean['car_brand'] = df_prod.get('ماركة السياراة', df_prod.iloc[:, 2])
+                products_clean['purchase_price'] = pd.to_numeric(df_prod.get('سعر التكلفه', df_prod.iloc[:, 3]), errors='coerce').fillna(0)
+                products_clean['wholesale_price'] = pd.to_numeric(df_prod.get('سعر بيع الجملة', df_prod.iloc[:, 4]), errors='coerce').fillna(0)
+                products_clean['sale_price'] = pd.to_numeric(df_prod.get('سعر البيع', df_prod.iloc[:, 5]), errors='coerce').fillna(0)
+                products_clean['stock_quantity'] = pd.to_numeric(df_prod.get('الكمية', df_prod.iloc[:, 6]), errors='coerce').fillna(0)
+                products_clean['min_stock_alert'] = 3
+                products_clean.to_sql('products', conn, if_exists='replace', index=False)
+            except Exception as e:
+                print("Error loading products:", e)
+
+    # 2. جدول المبيعات
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_no TEXT,
+            product_name TEXT,
+            quantity INTEGER,
+            unit_price REAL,
+            total_price REAL,
+            customer_name TEXT,
+            payment_type TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # 3. جدول المشتريات
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS purchases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplier_name TEXT,
+            product_name TEXT,
+            quantity INTEGER,
+            purchase_price REAL,
+            total_price REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # 4. جدول المصروفات والخزنة
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            amount REAL,
+            user_name TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    conn.commit()
+    conn.close()

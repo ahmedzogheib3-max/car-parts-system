@@ -1,0 +1,154 @@
+import streamlit as st
+import pandas as pd
+from database import get_connection
+from operations import ShopOperations
+from io import BytesIO
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+
+def render_ui():
+    st.set_page_config(page_title="برنامج قطع غيار السيارات الذكي", page_icon="🚗", layout="wide")
+    st.title("🚗 نظام إدارة محلات قطع غيار السيارات (متكامل بالذكاء الاصطناعي)")
+    
+    menu = st.sidebar.selectbox("📂 القائمة الرئيسية", [
+        "🤖 المحادثة مع المساعد الذكي", 
+        "📦 المخزون وقطع الغيار", 
+        "🛒 عمليات البيع", 
+        "💰 الخزنة والمصروفات", 
+        "📊 التقارير والتصدير (Excel & PDF)"
+    ])
+    
+    # 1. المساعد الذكي
+    if menu == "🤖 المحادثة مع المساعد الذكي":
+        st.subheader("💬 المساعد الذكي التفاعلي")
+        st.info("اسأل المساعد عن المخزون، المبيعات، أو حالة الخزنة بالعامية أو الفصحى.")
+        
+        user_msg = st.text_input("اكتب أمرك أو سؤالك هنا:")
+        if user_msg:
+            msg_lower = user_msg.lower()
+            if "مخزون" in msg_lower or "بضاعة" in msg_lower:
+                conn = get_connection()
+                df = pd.read_sql("SELECT name, stock_quantity, sale_price FROM products", conn)
+                conn.close()
+                st.success("🤖 إليك ملخص حالة المخزون الحالي:")
+                st.dataframe(df)
+            elif "خزنة" in msg_lower or "أرباح" in msg_lower:
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT SUM(total_price) FROM sales")
+                total_sales = cursor.fetchone()[0] or 0.0
+                cursor.execute("SELECT SUM(amount) FROM expenses")
+                total_exp = cursor.fetchone()[0] or 0.0
+                conn.close()
+                st.success(f"🤖 إجمالي المبيعات المحصلة: {total_sales:,.2f} ج.م | إجمالي المصروفات: {total_exp:,.2f} ج.م | صافي السيولة: {total_sales - total_exp:,.2f} ج.م")
+            else:
+                st.write("🤖 أهلاً بك! أنا جاهز لتنفيذ طلباتك، يمكنك سؤالي عن المخزون أو الخزنة، أو استخدام الأقسام الجانبية للبيع والمصروفات.")
+
+    # 2. المخزون
+    elif menu == "📦 المخزون وقطع الغيار":
+        st.subheader("📦 رصيد المخزون والبضاعة الحالية")
+        conn = get_connection()
+        df = pd.read_sql("SELECT * FROM products", conn)
+        conn.close()
+        st.dataframe(df, use_container_width=True)
+
+    # 3. عمليات البيع
+    elif menu == "🛒 عمليات البيع":
+        st.subheader("🛒 تسجيل فاتورة مبيعات جديدة")
+        conn = get_connection()
+        df_prod = pd.read_sql("SELECT name, stock_quantity, sale_price FROM products", conn)
+        conn.close()
+        
+        with st.form("sale_form"):
+            selected_product = st.selectbox("اختر القطعة", df_prod['name'].tolist() if not df_prod.empty else [])
+            quantity = st.number_input("الكمية المباعة", min_value=1, value=1, step=1)
+            customer_name = st.text_input("اسم العميل", value="عميل نقدي")
+            payment_type = st.selectbox("طريقة الدفع", ["نقدي", "تحويل", "أجل"])
+            
+            submit_sale = st.form_submit_button("إتمام عملية البيع وتحديث المخزون")
+            if submit_sale:
+                success, msg = ShopOperations.process_sale(selected_product, quantity, customer_name, payment_type)
+                if success:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+    # 4. الخزنة والمصروفات
+    elif menu == "💰 الخزنة والمصروفات":
+        st.subheader("💰 إدارة المصروفات وحركة الخزنة")
+        with st.form("expense_form"):
+            title = st.text_input("بند المصروف (مثال: إيجار، مرتبات، نثريات)")
+            amount = st.number_input("المبلغ", min_value=0.0)
+            user_name = st.text_input("بواسطة", value="Admin")
+            sub = st.form_submit_button("تسجيل المصروف")
+            if sub:
+                res = ShopOperations.add_expense(title, amount, user_name)
+                st.success(res)
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("سجل المصروفات المسجلة")
+        conn = get_connection()
+        df_exp = pd.read_sql("SELECT * FROM expenses", conn)
+        conn.close()
+        st.dataframe(df_exp, use_container_width=True)
+
+    # 5. التقارير والتصدير (Excel & PDF)
+    elif menu == "📊 التقارير والتصدير (Excel & PDF)":
+        st.subheader("📊 تصدير التقارير بصيغ مختلفة")
+        
+        conn = get_connection()
+        df_inv = pd.read_sql("SELECT * FROM products", conn)
+        conn.close()
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### 📥 تصدير المخزون إلى Excel")
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_inv.to_excel(writer, index=False, sheet_name='Inventory')
+            excel_data = output.getvalue()
+            st.download_button(
+                label="تحميل ملف الـ Excel (.xlsx)",
+                data=excel_data,
+                file_name="Inventory_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+        with col2:
+            st.markdown("### 📄 تصدير التقارير إلى PDF")
+            if st.button("توليد وتحميل تقرير المخزون PDF"):
+                pdf_buffer = BytesIO()
+                doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+                elements = []
+                styles = getSampleStyleSheet()
+                
+                title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName='Helvetica-Bold', fontSize=14, alignment=1)
+                elements.append(Paragraph("Auto Parts Inventory Report", title_style))
+                elements.append(Spacer(1, 10))
+                
+                table_data = [['Item Name', 'Car Brand', 'Qty', 'Sale Price']]
+                for _, row in df_inv.head(40).iterrows():
+                    table_data.append([str(row['name'])[:20], str(row['car_brand']), str(row['stock_quantity']), str(row['sale_price'])])
+                    
+                t = Table(table_data)
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                    ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.black)
+                ]))
+                elements.append(t)
+                doc.build(elements)
+                pdf_data = pdf_buffer.getvalue()
+                
+                st.download_button(
+                    label="اضغط هنا لتحميل ملف الـ PDF",
+                    data=pdf_data,
+                    file_name="Inventory_Report.pdf",
+                    mime="application/pdf"
+                )

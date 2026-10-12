@@ -1,0 +1,45 @@
+from database import get_connection
+from datetime import datetime
+
+class ShopOperations:
+    @staticmethod
+    def process_sale(product_name, quantity, customer_name, payment_type):
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM products WHERE name = ?", (product_name,))
+        prod = cursor.fetchone()
+        
+        if not prod:
+            conn.close()
+            return False, "القطعة غير موجودة بالمخزون."
+        
+        if prod['stock_quantity'] < quantity:
+            conn.close()
+            return False, f"الكمية غير كافية! المتاح في المخزون: {prod['stock_quantity']}"
+            
+        total_price = prod['sale_price'] * quantity
+        new_stock = prod['stock_quantity'] - quantity
+        invoice_no = f"INV-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        # خصم المخزون
+        cursor.execute("UPDATE products SET stock_quantity = ? WHERE name = ?", (new_stock, product_name))
+        
+        # تسجيل عملية البيع
+        cursor.execute('''
+            INSERT INTO sales (invoice_no, product_name, quantity, unit_price, total_price, customer_name, payment_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (invoice_no, product_name, quantity, prod['sale_price'], total_price, customer_name, payment_type))
+        
+        conn.commit()
+        conn.close()
+        return True, f"تمت عملية البيع بنجاح! رقم الفاتورة: {invoice_no} | الإجمالي: {total_price} ج.م"
+
+    @staticmethod
+    def add_expense(title, amount, user_name="Admin"):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO expenses (title, amount, user_name) VALUES (?, ?, ?)", (title, amount, user_name))
+        conn.commit()
+        conn.close()
+        return "تم تسجيل المصروف بنجاح."
